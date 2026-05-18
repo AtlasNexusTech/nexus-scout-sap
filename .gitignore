@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+package-lock.json
+
+# Env
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent output
+examples/*.json
+examples/*.md
+!examples/.gitkeep
+
+# Keys
+*.pem
+keypair.json

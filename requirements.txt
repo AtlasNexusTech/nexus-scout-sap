@@ -1,0 +1,6 @@
+acedatacloud>=2024.0.0
+acedatacloud-x402>=0.1.0
+solders>=0.21
+base58>=2.1
+httpx>=0.25
+python-dotenv>=1.0
