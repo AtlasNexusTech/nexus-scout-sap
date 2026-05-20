@@ -2,14 +2,11 @@
 x402 Payment Handler — Solana USDC micropayments for Ace Data Cloud.
 
 Uses the acedatacloud-x402 package to sign payment envelopes with a Solana
-keypair. Supports both sync and async AceDataCloud clients.
-
-No API key needed — payments flow automatically on 402 responses.
+keypair. No API token needed — payments flow automatically on 402 responses.
 """
 
 import os
 import logging
-from pathlib import Path
 from typing import Optional
 
 from acedatacloud_x402 import create_x402_payment_handler, SolanaKeypairSigner
@@ -33,10 +30,11 @@ def load_solana_signer(private_key_b58: Optional[str] = None) -> SolanaKeypairSi
 
 def create_solana_x402_handler(
     private_key_b58: Optional[str] = None,
-) -> Optional[callable]:
+):
     """Create x402 payment handler for Solana USDC payments.
 
     Returns None if no private key is configured (dry-run mode).
+    Returns a callable handler for acedatacloud.AceDataCloud(payment_handler=...).
     """
     try:
         signer = load_solana_signer(private_key_b58)

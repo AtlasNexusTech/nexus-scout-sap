@@ -1,16 +1,15 @@
 """
-Ace Data Cloud Service Wrappers.
+Ace Data Cloud Service Wrappers — Real x402 SDK calls.
 
-Provides typed, logged access to 3+ distinct Ace Data Cloud services:
-1. Search — real-time web search for crypto data
-2. Chat — AI analysis and intelligence generation
-3. Images — AI-generated visualizations (charts, infographics)
+Uses 3 distinct Ace Data Cloud services:
+1. Search — ace.search.google() via x402
+2. Chat — ace.openai.chat.completions.create() via x402
+3. Embeddings — ace.openai.embeddings.create() via x402 (3rd distinct service)
 
-All services use x402 payments (no API key required).
+All services use x402 payments (Solana USDC) — no API token required.
 """
 
 import logging
-import time
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -36,11 +35,10 @@ class ServiceUsage:
 @dataclass
 class AceServiceRegistry:
     """Registry of Ace Data Cloud services used by the agent."""
-
     client: AceDataCloud
     search: ServiceUsage = field(default_factory=lambda: ServiceUsage("search"))
     chat: ServiceUsage = field(default_factory=lambda: ServiceUsage("chat"))
-    images: ServiceUsage = field(default_factory=lambda: ServiceUsage("images"))
+    embeddings: ServiceUsage = field(default_factory=lambda: ServiceUsage("embeddings"))
 
     def summary(self) -> dict:
         """Bounty compliance: prove 3+ distinct services were used."""
@@ -49,13 +47,13 @@ class AceServiceRegistry:
                 "calls": s.calls,
                 "estimated_cost_usdc": round(s.total_cost, 6),
             }
-            for s in [self.search, self.chat, self.images]
+            for s in [self.search, self.chat, self.embeddings]
             if s.calls > 0
         }
 
 
 class AceDataServices:
-    """High-level wrappers for Ace Data Cloud services."""
+    """High-level wrappers for Ace Data Cloud services via x402."""
 
     def __init__(self, client: AceDataCloud):
         self.client = client
@@ -63,20 +61,25 @@ class AceDataServices:
 
     # ─── 1. Search ───────────────────────────────────────────
     def search_market_data(self, query: str) -> str:
-        """Search for real-time crypto market data.
+        """Search for real-time data via Ace Data Cloud Google Search.
 
-        Uses Ace Data Cloud's Search API for up-to-date information.
+        Uses x402 payment handler (no API token needed).
         Counts as 1 of the 3 required distinct services.
         """
         logger.info(f"🔍 Search: {query}")
         try:
-            result = self.client.search.create(
-                query=query,
-                search_type="web",
-            )
-            content = str(result)
+            result = self.client.search.google(query=query)
+            # result is a dict with 'answer_box', 'organic_results', etc.
+            organic = result.get("organic_results", [])
+            snippets = []
+            for r in organic[:5]:
+                title = r.get("title", "")
+                snippet = r.get("snippet", "")
+                snippets.append(f"- {title}\n  {snippet}")
+            content = "\n".join(snippets) if snippets else str(result)[:2000]
+
             self.registry.search.record(
-                cost=0.001,  # estimated
+                cost=0.001,
                 result_preview=content,
             )
             return content
@@ -87,13 +90,14 @@ class AceDataServices:
     # ─── 2. Chat / AI Analysis ───────────────────────────────
     def analyze(self, system_prompt: str, user_content: str,
                 model: str = "gpt-4o-mini") -> str:
-        """AI-powered analysis via chat completions.
+        """AI-powered analysis via OpenAI chat (Ace Data Cloud).
 
-        Uses Ace Data Cloud's Chat API. The 2nd required distinct service.
+        Uses ace.openai.chat.completions.create() via x402.
+        Counts as the 2nd required distinct service.
         """
         logger.info(f"🤖 AI Analysis [model={model}]")
         try:
-            response = self.client.chat.completions.create(
+            resp = self.client.openai.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -101,9 +105,9 @@ class AceDataServices:
                 ],
                 max_tokens=2000,
             )
-            content = response.choices[0].message.content
+            content = resp["choices"][0]["message"]["content"]
             self.registry.chat.record(
-                cost=0.002,  # estimated for gpt-4o-mini
+                cost=0.002,
                 result_preview=content,
             )
             return content
@@ -114,36 +118,37 @@ class AceDataServices:
     def summarize(self, text: str, max_tokens: int = 500) -> str:
         """Summarize long text into a concise brief."""
         return self.analyze(
-            system_prompt="You are a crypto intelligence analyst. Summarize the following data into a concise, actionable brief. Focus on key metrics, trends, and anomalies.",
+            system_prompt=(
+                "You are a crypto intelligence analyst. Summarize the following "
+                "data into a concise, actionable brief. Focus on key metrics, "
+                "trends, and anomalies."
+            ),
             user_content=text,
         )
 
-    # ─── 3. Image Generation ─────────────────────────────────
-    def generate_visual(self, prompt: str,
-                        provider: str = "nano-banana") -> Optional[str]:
-        """Generate an AI image (chart, infographic, or visual aid).
+    # ─── 3. Embeddings (3rd distinct service) ────────────────
+    def compute_embeddings(self, text: str,
+                           model: str = "text-embedding-3-small") -> list[float]:
+        """Compute text embeddings via OpenAI embeddings API.
 
-        Uses Ace Data Cloud's Images API. The 3rd required distinct service.
-        Returns URL to generated image, or None on failure.
+        Uses ace.openai.embeddings.create() via x402.
+        Counts as the 3rd required distinct service.
         """
-        logger.info(f"🎨 Image generation [{provider}]: {prompt[:80]}...")
+        logger.info(f"🧬 Embeddings [{model}]: {text[:60]}...")
         try:
-            task = self.client.images.generate(
-                provider=provider,
-                prompt=prompt,
+            resp = self.client.openai.embeddings.create(
+                model=model,
+                input=text,
             )
-            # Wait for async image generation
-            result = task.wait(timeout=120)
-            url = getattr(result, "url", str(result))
-            self.registry.images.record(
-                cost=0.005,  # estimated
-                result_preview=url,
+            embedding = resp["data"][0]["embedding"]
+            self.registry.embeddings.record(
+                cost=0.0001,
+                result_preview=f"dim={len(embedding)}",
             )
-            logger.info(f"🎨 Image ready: {url}")
-            return url
+            return embedding
         except Exception as e:
-            logger.error(f"Image generation failed: {e}")
-            return None
+            logger.error(f"Embeddings failed: {e}")
+            return []
 
     @property
     def usage_report(self) -> dict:

@@ -177,7 +177,7 @@ npx tsx publish-tools.ts
 
 ## 📄 License
 
-MIT — Atlas Nexus ([AtlasNexusOps](https://github.com/AtlasNexusOps))
+MIT — Atlas Nexus ([AtlasNexusTech](https://github.com/AtlasNexusTech))
 
 ---
 

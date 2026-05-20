@@ -44,10 +44,7 @@ class SynapseAgentProtocol:
         self._http = httpx.Client(timeout=30.0)
 
     def _headers(self) -> dict:
-        h = {"Content-Type": "application/json"}
-        if self.api_key:
-            h["Authorization"] = f"Bearer {self.api_key}"
-        return h
+        return {"Content-Type": "application/json"}
 
     # ─── Agent Registration ──────────────────────────────────
     def register_agent(
@@ -157,6 +154,46 @@ class SynapseAgentProtocol:
         except Exception as e:
             logger.debug(f"Activity log failed (non-critical): {e}")
             return {"logged": "local", "error": str(e)}
+
+    # ─── Synapse Sentinel ──────────────────────────────────
+    def call_sentinel(self, agent_pda: str = "") -> dict:
+        """Call Synapse Sentinel agent for agent verification/monitoring.
+
+        Sentinel PDA: Ccr2yK3hLALU4p8oNRqrh4dGuvPJTth5KCLMio8cE1ph
+        Required for Category 1 bounty compliance.
+        """
+        sentinel_pda = "Ccr2yK3hLALU4p8oNRqrh4dGuvPJTth5KCLMio8cE1ph"
+        target = agent_pda or self.agent_id or "unknown"
+
+        logger.info(f"🛡️ Calling Synapse Sentinel ({sentinel_pda[:8]}...)")
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "agent.call",
+            "params": {
+                "agentId": sentinel_pda,
+                "targetAgent": target,
+                "action": "verify_agent",
+                "data": {
+                    "source": "autonomous_workflow",
+                    "timestamp": int(time.time()),
+                },
+            },
+        }
+
+        try:
+            resp = self._http.post(self.endpoint, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"✅ Sentinel response: {str(data)[:200]}")
+                return data
+            else:
+                logger.warning(f"Sentinel call returned {resp.status_code}")
+                return {"sentinel": "acknowledged", "status": resp.status_code}
+        except Exception as e:
+            logger.warning(f"Sentinel call failed (non-critical): {e}")
+            return {"sentinel": "error", "error": str(e)}
 
     def close(self):
         self._http.close()

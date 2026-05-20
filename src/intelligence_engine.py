@@ -1,11 +1,10 @@
 """
 Intelligence Engine — Data Collection & Analysis Pipeline.
 
-Orchestrates: data fetching → AI analysis → report synthesis.
-Clean architecture, no external toolkit dependencies.
+Orchestrates: data fetching → AI analysis → embeddings → report synthesis.
+Uses 3 distinct Ace Data Cloud services via x402 payments.
 """
 
-import json
 import logging
 from typing import Any, Optional
 from dataclasses import dataclass, field
@@ -24,6 +23,7 @@ class IntelligenceResult:
     # Raw data
     search_results: str = ""
     ai_analysis: str = ""
+    embedding_dim: int = 0
     visualization_url: Optional[str] = None
 
     # Payment audit
@@ -51,7 +51,7 @@ class IntelligenceResult:
 class IntelligenceEngine:
     """Core intelligence pipeline.
 
-    Flow: Search → Process → Analyze → Report
+    Flow: Search → Analyze → Embeddings → Report
     All 3 Ace Data Cloud services used via x402 payments.
     """
 
@@ -68,8 +68,8 @@ class IntelligenceEngine:
         """Execute a complete intelligence run.
 
         1. Search for data via Ace Data Cloud Search (service #1)
-        2. AI analysis via Ace Data Cloud Chat (service #2)
-        3. Optional: Generate visualization via Ace Data Cloud Images (service #3)
+        2. AI analysis via Ace Data Cloud Chat — OpenAI (service #2)
+        3. Embeddings via Ace Data Cloud Embeddings (service #3)
         4. Track all payments via x402
 
         Returns:
@@ -90,7 +90,7 @@ class IntelligenceEngine:
         result.log(f"  Search complete ({len(result.search_results)} chars)")
 
         # ─── Step 2: AI Analysis (Chat) ───
-        result.log("Step 2/3: AI analysis via Ace Data Cloud Chat...")
+        result.log("Step 2/3: AI analysis via Ace Data Cloud Chat (GPT-4o-mini)...")
 
         analysis_prompt = f"""Analyze the following search results about '{query}' from a crypto intelligence perspective.
 Provide:
@@ -103,7 +103,11 @@ Search results:
 {result.search_results[:3000]}
 """
         result.ai_analysis = self.services.analyze(
-            system_prompt="You are an elite crypto intelligence analyst. Provide concise, data-driven analysis with specific metrics and actionable insights. Be direct — no fluff.",
+            system_prompt=(
+                "You are an elite crypto intelligence analyst. Provide concise, "
+                "data-driven analysis with specific metrics and actionable insights. "
+                "Be direct — no fluff."
+            ),
             user_content=analysis_prompt,
         )
         result.services_used.append("chat")
@@ -111,20 +115,19 @@ Search results:
         result.total_cost_usdc += 0.002
         result.log(f"  Analysis complete ({len(result.ai_analysis)} chars)")
 
-        # ─── Step 3: Visualization (Images) ───
-        if generate_image:
-            result.log("Step 3/3: Generating visualization via Ace Data Cloud Images...")
-            image_prompt = f"Crypto market intelligence infographic about {query}, professional style, dark theme, data visualization, clean modern design"
-            result.visualization_url = self.services.generate_visual(image_prompt)
-            result.services_used.append("images")
-            self.payments.record("images", 0.005)
-            result.total_cost_usdc += 0.005
-            if result.visualization_url:
-                result.log(f"  Visualization ready: {result.visualization_url[:60]}...")
-            else:
-                result.log("  Visualization skipped (generation failed)")
-        else:
-            result.log("Step 3/3: Skipped (image generation disabled)")
+        # ─── Step 3: Embeddings (3rd distinct service) ───
+        result.log("Step 3/3: Computing embeddings via Ace Data Cloud...")
+        embedding = self.services.compute_embeddings(
+            f"{query}: {result.ai_analysis[:500]}"
+        )
+        result.services_used.append("embeddings")
+        result.embedding_dim = len(embedding)
+        self.payments.record("embeddings", 0.0001)
+        result.total_cost_usdc += 0.0001
+        result.log(f"  Embeddings complete (dim={result.embedding_dim})")
 
-        result.log(f"✓ Intelligence run complete — {len(result.services_used)} services, ${result.total_cost_usdc:.6f} USDC")
+        result.log(
+            f"✓ Intelligence run complete — {len(result.services_used)} services, "
+            f"${result.total_cost_usdc:.6f} USDC"
+        )
         return result

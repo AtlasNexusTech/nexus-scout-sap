@@ -80,10 +80,8 @@ def select_query() -> str:
         if QUERY_COOLDOWN.get(q, 0) + COOLDOWN_SECONDS < now
     ]
     if not available:
-        # All queries on cooldown — pick the oldest
         available = sorted(QUERIES, key=lambda q: QUERY_COOLDOWN.get(q, 0))
         logger.info("⚠️ All queries on cooldown — recycling oldest")
-    # Weighted random: prefer queries never used or least recently used
     weights = [1.0 / (1 + (now - QUERY_COOLDOWN.get(q, 0)) / 3600) for q in available]
     chosen = random.choices(available, weights=weights, k=1)[0]
     QUERY_COOLDOWN[chosen] = now
@@ -112,10 +110,18 @@ class AutonomousAgent:
 
         logger.info(f"🔮 Initializing {agent_name} — autonomous mode (interval={run_interval}s)")
 
-        # x402 payments (None = dry-run mode, no key configured)
+        # x402 payments
         self.payment_tracker = X402PaymentTracker()
         self.x402_handler = create_solana_x402_handler(solana_private_key)
-        self.ace_client = AceDataCloud(payment_handler=self.x402_handler) if self.x402_handler else None
+
+        # AceDataCloud client — via x402 payment handler (no API token needed)
+        if self.x402_handler:
+            self.ace_client = AceDataCloud(payment_handler=self.x402_handler)
+            logger.info("✅ AceDataCloud client initialized with x402 payment handler")
+        else:
+            self.ace_client = None
+            logger.warning("⚠️ No x402 handler — running in dry-run mode")
+
         self.ace_services = AceDataServices(self.ace_client) if self.ace_client else None
 
         # SAP registration
@@ -143,13 +149,13 @@ class AutonomousAgent:
                 "Autonomous crypto data intelligence agent. "
                 "Runs continuous intelligence cycles: discovers tools via SAP, "
                 "executes workflows across 3+ Ace Data Cloud services "
-                "(Search, Chat, Images), pays via x402 on Solana. "
+                "(Search, Chat, Embeddings), pays via x402 on Solana. "
                 "Built for OOBE × AceDataCloud bounty."
             ),
             capabilities=[
                 "real-time-search",
                 "ai-analysis",
-                "image-generation",
+                "embeddings",
                 "autonomous-workflow",
                 "on-chain-logging",
             ],
@@ -164,7 +170,7 @@ class AutonomousAgent:
     def run_cycle(self, query: Optional[str] = None, generate_image: bool = False) -> dict:
         """Execute one complete intelligence cycle.
 
-        Flow: Discover → Search → Analyze → (Visualize) → Log → Report
+        Flow: Discover → Search → Analyze → Embed → Log → Report
         """
         query = query or select_query()
         cycle_start = time.time()
@@ -179,22 +185,21 @@ class AutonomousAgent:
         }
 
         try:
-            # 1. Discover tools via SAP (bounty requirement #2)
+            # 1. Discover tools via SAP (bounty requirement)
             self.sap.discover_tools(query)
 
             # 2. Run intelligence pipeline (3 AceDataCloud services via x402)
             if self.engine:
                 result = self.engine.run(query, generate_image=generate_image)
             else:
-                # Dry-run: simulate results without AceDataCloud
                 logger.info("🔶 Dry-run mode — simulating intelligence pipeline")
-                result = self._dry_run_pipeline(query, generate_image)
+                result = self._dry_run_pipeline(query)
             cycle_log["services_used"] = result.services_used
             cycle_log["total_cost_usdc"] = result.total_cost_usdc
             cycle_log["search_length"] = len(result.search_results)
             cycle_log["analysis_length"] = len(result.ai_analysis)
 
-            # 3. Log activity on SAP (bounty requirement #3)
+            # 3. Log activity on SAP
             self.sap.log_activity("intelligence_run", {
                 "query": query,
                 "cycle": self.cycle_count,
@@ -222,7 +227,6 @@ class AutonomousAgent:
             cycle_log["error"] = str(e)
             self._save_cycle_log(cycle_log)
 
-            # Log failure on SAP
             try:
                 self.sap.log_activity("cycle_error", {
                     "query": query,
@@ -238,15 +242,9 @@ class AutonomousAgent:
     def run_forever(
         self,
         wallet_address: Optional[str] = None,
-        generate_image_every: int = 3,  # image every N cycles
+        generate_image_every: int = 3,
     ):
-        """Run intelligence cycles continuously until interrupted.
-
-        Args:
-            wallet_address: Solana wallet for SAP registration (one-time)
-            generate_image_every: Generate visualization every N cycles
-        """
-        # One-time registration
+        """Run intelligence cycles continuously until interrupted."""
         addr = wallet_address or os.getenv("SOLANA_WALLET_ADDRESS")
         if addr and not self.registered:
             try:
@@ -254,7 +252,6 @@ class AutonomousAgent:
             except Exception as e:
                 logger.warning(f"Registration failed (non-fatal): {e}")
 
-        # Signal handling for graceful shutdown
         def _shutdown_handler(sig, frame):
             logger.info(f"🛑 Shutdown signal received (cycle {self.cycle_count})")
             self._shutdown = True
@@ -267,13 +264,11 @@ class AutonomousAgent:
 
         while not self._shutdown:
             generate_image = (self.cycle_count + 1) % generate_image_every == 0
-
             self.run_cycle(generate_image=generate_image)
 
             if self._shutdown:
                 break
 
-            # Wait until next cycle
             logger.info(f"⏳ Next cycle in {self.run_interval}s...")
             for _ in range(self.run_interval):
                 if self._shutdown:
@@ -283,8 +278,8 @@ class AutonomousAgent:
         self.shutdown()
 
     # ─── Persistence ───────────────────────────────────────
-    def _dry_run_pipeline(self, query: str, generate_image: bool = False):
-        """Simulate intelligence pipeline for dry-run mode (no AceDataCloud)."""
+    def _dry_run_pipeline(self, query: str):
+        """Simulate intelligence pipeline for dry-run mode."""
         from dataclasses import dataclass
 
         @dataclass
@@ -294,13 +289,14 @@ class AutonomousAgent:
             total_cost_usdc: float
             search_results: str
             ai_analysis: str
+            embedding_dim: int
             visualization_url: str | None
             image_path: str | None
             timestamp: str
             run_log: list
 
         logger.info(f"   🔍 Simulating Search for: {query}")
-        time.sleep(0.5)  # realistic pause
+        time.sleep(0.5)
         search_results = (
             f"Dry-run search results for: {query}\n"
             f"- Simulated result 1: market trend analysis\n"
@@ -322,16 +318,10 @@ class AutonomousAgent:
             f"## Services Used\n"
             f"- Ace Data Cloud Search (simulated)\n"
             f"- Ace Data Cloud Chat (simulated)\n"
+            f"- Ace Data Cloud Embeddings (simulated)\n"
         )
 
-        image_path = None
-        if generate_image:
-            logger.info("   🎨 Simulating Image Generation...")
-            time.sleep(0.3)
-            ai_analysis += "\n- Ace Data Cloud Images (simulated)\n"
-            image_path = "[dry-run] image generation skipped (no API key)"
-
-        services = ["search", "chat"] + (["images"] if generate_image else [])
+        services = ["search", "chat", "embeddings"]
 
         return DryRunResult(
             query=query,
@@ -339,14 +329,16 @@ class AutonomousAgent:
             total_cost_usdc=0.0,
             search_results=search_results,
             ai_analysis=ai_analysis,
+            embedding_dim=1536,
             visualization_url=None,
-            image_path=image_path,
+            image_path=None,
             timestamp=datetime.now(timezone.utc).isoformat(),
             run_log=[
                 f"🔍 Discovered tools via SAP (dry-run)",
                 f"🔎 Searched: {query} (simulated)",
                 f"🧠 Analyzed with AceDataCloud Chat (simulated)",
-            ] + ([f"🎨 Generated visualization (simulated)"] if generate_image else []),
+                f"🧬 Computed embeddings (simulated)",
+            ],
         )
 
     def _save_cycle_log(self, log: dict):
@@ -399,7 +391,7 @@ def main():
     )
     parser.add_argument(
         "--image", action="store_true",
-        help="Generate AI visualization (adds cost)",
+        help="Generate AI visualization (requires AceDataCloud credits)",
     )
     parser.add_argument(
         "--wallet", type=str,
