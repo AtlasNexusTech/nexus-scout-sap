@@ -36,12 +36,14 @@ try:
     from .sap import SynapseAgentProtocol
     from .intelligence_engine import IntelligenceEngine
     from .report_generator import ReportGenerator
+    from .agent_memory_client import AgentMemory
 except ImportError:
     from x402_payments import create_solana_x402_handler, X402PaymentTracker
     from ace_services import AceDataServices
     from sap import SynapseAgentProtocol
     from intelligence_engine import IntelligenceEngine
     from report_generator import ReportGenerator
+    from agent_memory_client import AgentMemory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,10 +110,17 @@ class AutonomousAgent:
         self._shutdown = False
         self.cycle_count = 0
 
+        # Init payment tracker early (needed by _restore_state)
+        self.payment_tracker = X402PaymentTracker()
+
+        # ─── Agent Memory Server (LOQ) ─────────────────────
+        # Survit aux reboots — état persistant partagé entre tous les agents
+        self.memory = AgentMemory(agent_name.lower().replace(" ", "-"))
+        self._restore_state()
+
         logger.info(f"🔮 Initializing {agent_name} — autonomous mode (interval={run_interval}s)")
 
         # x402 payments
-        self.payment_tracker = X402PaymentTracker()
         self.x402_handler = create_solana_x402_handler(solana_private_key)
 
         # AceDataCloud client — via x402 payment handler (no API token needed)
@@ -140,6 +149,46 @@ class AutonomousAgent:
         # State
         self.agent_id: Optional[str] = None
         self.registered = False
+
+    # ─── Persistent State (Agent Memory Server) ──────────
+    def _restore_state(self):
+        """Restore agent state from LOQ memory server (survives reboots)."""
+        try:
+            cycle_count_raw = self.memory.get("cycle_count")
+            if cycle_count_raw:
+                self.cycle_count = int(cycle_count_raw)
+            total_cost_raw = self.memory.get("total_cost_usdc")
+            if total_cost_raw:
+                self.payment_tracker.total_usdc = float(total_cost_raw)
+            # Restore query cooldowns
+            cooldowns_raw = self.memory.get("query_cooldowns")
+            if cooldowns_raw:
+                for line in cooldowns_raw.split("||"):
+                    if "::" in line:
+                        q, ts = line.split("::", 1)
+                        QUERY_COOLDOWN[q] = float(ts)
+            logger.info(
+                f"🧠 State restored: cycle={self.cycle_count}, "
+                f"volume=${self.payment_tracker.total_usdc:.6f}, "
+                f"cooldowns={len(QUERY_COOLDOWN)}"
+            )
+        except Exception as e:
+            logger.debug(f"Memory restore skipped (server unreachable?): {e}")
+
+    def _save_state(self):
+        """Save agent state to LOQ memory server (persists across reboots)."""
+        try:
+            self.memory.set("cycle_count", str(self.cycle_count))
+            self.memory.set("total_cost_usdc", str(self.payment_tracker.total_usdc))
+            cooldown_str = "||".join(
+                f"{q}::{ts}" for q, ts in QUERY_COOLDOWN.items()
+            )
+            self.memory.set("query_cooldowns", cooldown_str)
+            self.memory.set("last_run", datetime.now(timezone.utc).isoformat())
+            self.memory.set("agent_id", self.agent_id or "unregistered")
+            self.memory.set("status", "active" if not self._shutdown else "shutdown")
+        except Exception as e:
+            logger.debug(f"Memory save failed (non-critical): {e}")
 
     # ─── Registration ──────────────────────────────────────
     def register(self, wallet_address: str) -> bool:
@@ -213,8 +262,11 @@ class AutonomousAgent:
             cycle_log["report"] = str(report_path)
             cycle_log["success"] = True
 
-            # 5. Save cycle log
+            # 5. Save cycle log locally
             self._save_cycle_log(cycle_log)
+
+            # 6. Persist state to agent memory server (LOQ)
+            self._save_state()
 
             elapsed = time.time() - cycle_start
             logger.info(
@@ -361,6 +413,10 @@ class AutonomousAgent:
         state_path.write_text(json.dumps(state, indent=2))
         logger.info(f"💾 State saved: {state_path}")
         logger.info(f"📊 Session: {self.cycle_count} cycles, ${self.payment_tracker.total_usdc:.6f} USDC total")
+
+        # Save final state to agent memory server
+        self._save_state()
+        logger.info(f"🧠 Memory server updated: cycle={self.cycle_count}, volume=${self.payment_tracker.total_usdc:.6f}")
 
         try:
             self.sap.close()
